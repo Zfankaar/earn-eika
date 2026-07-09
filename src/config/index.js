@@ -4,6 +4,7 @@ module.exports = {
   bot: {
     token: process.env.BOT_TOKEN,
     name: 'Earn Eika',
+    username: process.env.BOT_USERNAME || 'Earn_eika_bot',
     currency: 'EIKA',
   },
 

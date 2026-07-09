@@ -16,7 +16,7 @@ async function getReferralLink(telegramId) {
     code = generateReferralCode();
     await db.users.updateOne({ telegramId }, { referralCode: code });
   }
-  return `https://t.me/${config.bot.name.toLowerCase().replace(/\s/g, '')}bot?start=ref_${code}`;
+  return `https://t.me/${config.bot.username}?start=ref_${code}`;
 }
 
 async function processReferral(telegramId, refCode, bot) {
