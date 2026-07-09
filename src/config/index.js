@@ -40,4 +40,6 @@ module.exports = {
     maxCommands: 20,
     maxCalls: 30,
   },
+
+  proxy: process.env.PROXY || '',
 };

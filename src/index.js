@@ -15,7 +15,12 @@ if (!config.bot.token || config.bot.token === 'your_bot_token_here') {
   process.exit(1);
 }
 
-const bot = new TelegramBot(config.bot.token, { polling: true });
+const botOptions = { polling: true };
+if (config.proxy) {
+  botOptions.request = { proxy: config.proxy };
+  logger.info(`Using proxy: ${config.proxy}`);
+}
+const bot = new TelegramBot(config.bot.token, botOptions);
 
 logger.info('Bot started successfully');
 
