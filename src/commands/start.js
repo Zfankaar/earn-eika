@@ -1,31 +1,31 @@
-const { findOrCreateUser, isBanned } = require('../helpers/userHelper');
+const { findOrCreateUser } = require('../helpers/userHelper');
 const { processReferral } = require('../services/referralService');
 const { homeKeyboard } = require('../keyboards');
 const { getMsg } = require('../messages');
 const { limitCommand } = require('../utils/rateLimiter');
 const logger = require('../services/logger');
 
-async function startHandler(msg, bot) {
-  const telegramId = msg.from.id;
-  const text = msg.text || '';
+async function startHandler(ctx, bot) {
+  const telegramId = ctx.from.id;
+  const text = ctx.message.text || '';
 
   if (limitCommand(telegramId)) return;
 
   try {
-    const user = await findOrCreateUser(telegramId, msg.from);
+    const user = await findOrCreateUser(telegramId, ctx.from);
     if (user.banned) {
       const config = require('../config');
-      return bot.sendMessage(telegramId, getMsg('banned', user.language).replace('{support}', config.support.username));
+      return ctx.reply(getMsg('banned', user.language).replace('{support}', config.support.username));
     }
 
     const refMatch = text.match(/\/start ref_(.+)/);
     if (refMatch) {
       const refCode = refMatch[1];
-      await processReferral(telegramId, refCode, bot);
+      await processReferral(telegramId, refCode, bot.telegram);
     }
 
     const welcome = getMsg('start', user.language, user.firstName);
-    await bot.sendMessage(telegramId, welcome, {
+    await ctx.reply(welcome, {
       parse_mode: 'Markdown',
       reply_markup: homeKeyboard(),
     });
@@ -33,7 +33,7 @@ async function startHandler(msg, bot) {
     logger.user(telegramId, 'Started the bot');
   } catch (err) {
     logger.error(`Start handler error: ${err.message}`);
-    bot.sendMessage(telegramId, getMsg('error', 'en'));
+    ctx.reply(getMsg('error', 'en'));
   }
 }
 

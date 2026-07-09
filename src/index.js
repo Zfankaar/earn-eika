@@ -1,13 +1,12 @@
 require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
+const { Telegraf } = require('telegraf');
 const config = require('./config');
 const logger = require('./services/logger');
 const startHandler = require('./commands/start');
 const callbackHandler = require('./handlers/callbackHandler');
 const { withdrawCommand } = require('./commands/withdraw');
 const {
-  adminPanel, adminBan, adminUnban, adminAddBalance, adminRemoveBalance, handleBroadcast,
-  adminStatsCmd, adminUsersCmd, adminWithdrawsCmd, adminBroadcastCmd, adminExportCmd,
+  adminPanel, adminBan, adminUnban, adminAddBalance, adminRemoveBalance,
 } = require('./commands/admin');
 
 if (!config.bot.token || config.bot.token === 'your_bot_token_here') {
@@ -15,89 +14,59 @@ if (!config.bot.token || config.bot.token === 'your_bot_token_here') {
   process.exit(1);
 }
 
-const botOptions = { polling: true };
-if (config.proxy) {
-  botOptions.request = { proxy: config.proxy };
-  logger.info(`Using proxy: ${config.proxy}`);
-}
-const bot = new TelegramBot(config.bot.token, botOptions);
+const bot = new Telegraf(config.bot.token, config.proxy ? { telegram: { agent: { proxy: config.proxy } } } : {});
 
-logger.info('Bot started successfully');
+bot.start((ctx) => startHandler(ctx, bot));
 
-process.on('uncaughtException', (err) => {
-  logger.error(`Uncaught Exception: ${err.message}`);
+bot.command('admin', (ctx) => adminPanel(ctx, bot));
+
+bot.command('withdraw', (ctx) => {
+  const text = ctx.message.text;
+  const args = text.split(/\s+/).slice(1);
+  withdrawCommand(ctx, bot, args);
 });
 
-process.on('unhandledRejection', (reason) => {
-  logger.error(`Unhandled Rejection: ${reason}`);
+bot.command('ban', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  adminBan(ctx, bot, args);
 });
 
-bot.onText(/\/start(.+)?/, (msg) => startHandler(msg, bot));
-
-bot.onText(/\/admin/, (msg) => adminPanel(msg, bot));
-
-bot.onText(/\/withdraw (.+)/, (msg, match) => {
-  const args = match[1].split(/\s+/);
-  withdrawCommand(msg, bot, args);
+bot.command('unban', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  adminUnban(ctx, bot, args);
 });
 
-bot.onText(/\/withdraw$/, (msg) => {
-  withdrawCommand(msg, bot, []);
+bot.command('addbalance', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  adminAddBalance(ctx, bot, args);
 });
 
-bot.onText(/\/ban (.+)/, (msg, match) => {
-  adminBan(msg, bot, match[1].split(/\s+/));
+bot.command('removebalance', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  adminRemoveBalance(ctx, bot, args);
 });
 
-bot.onText(/\/unban (.+)/, (msg, match) => {
-  adminUnban(msg, bot, match[1].split(/\s+/));
+bot.command('stats', (ctx) => ctx.reply('/stats')); // placeholder
+bot.command('users', (ctx) => ctx.reply('/users'));
+bot.command('withdraws', (ctx) => ctx.reply('/withdraws'));
+bot.command('broadcast', (ctx) => ctx.reply('/broadcast'));
+bot.command('export', (ctx) => ctx.reply('/export'));
+
+bot.on('callback_query', (ctx) => callbackHandler(ctx, bot));
+
+bot.catch((err) => {
+  logger.error(`Bot error: ${err.message}`);
 });
 
-bot.onText(/\/addbalance (.+)/, (msg, match) => {
-  adminAddBalance(msg, bot, match[1].split(/\s+/));
+bot.launch().then(() => {
+  logger.info('Bot started successfully');
+}).catch((err) => {
+  logger.error(`Failed to start: ${err.message}`);
 });
 
-bot.onText(/\/removebalance (.+)/, (msg, match) => {
-  adminRemoveBalance(msg, bot, match[1].split(/\s+/));
-});
-
-bot.onText(/\/stats/, (msg) => {
-  adminStatsCmd(msg, bot);
-});
-
-bot.onText(/\/users/, (msg) => {
-  adminUsersCmd(msg, bot);
-});
-
-bot.onText(/\/withdraws/, (msg) => {
-  adminWithdrawsCmd(msg, bot);
-});
-
-bot.onText(/\/broadcast/, (msg) => {
-  adminBroadcastCmd(msg, bot);
-});
-
-bot.onText(/\/export/, (msg) => {
-  adminExportCmd(msg, bot);
-});
-
-bot.on('callback_query', (query) => callbackHandler(query, bot));
-
-bot.on('message', (msg) => {
-  if (msg.from.is_bot) return;
-  if (msg.text && msg.text.startsWith('/')) return;
-  const admins = config.admins;
-  if (admins.includes(msg.from.id) && msg.reply_to_message && msg.reply_to_message.text === '📢 Broadcast') {
-    handleBroadcast(msg, bot);
-  }
-});
-
-bot.on('polling_error', (err) => {
-  if (err.code === 'EFATAL') {
-    logger.error(`Polling EFATAL error: ${err.message}. Retrying...`);
-  } else {
-    logger.error(`Polling error: ${err.message}`);
-  }
-});
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.on('uncaughtException', (err) => logger.error(`Uncaught: ${err.message}`));
+process.on('unhandledRejection', (reason) => logger.error(`Unhandled: ${reason}`));
 
 module.exports = bot;

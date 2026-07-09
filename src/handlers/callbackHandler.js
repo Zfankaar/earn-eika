@@ -9,281 +9,101 @@ const { watchAd, visitWebsite, joinChannel } = require('../services/earn');
 const { limitCallback } = require('../utils/rateLimiter');
 const config = require('../config');
 const logger = require('../services/logger');
-
-const {
-  adminStats, adminUsers, adminBroadcast, adminWithdraws, adminExport,
-} = require('../commands/admin');
+const { adminStats, adminUsers, adminBroadcast, adminWithdraws, adminExport } = require('../commands/admin');
 const { approveWithdrawAction, rejectWithdrawAction } = require('../commands/withdraw');
 
-async function callbackHandler(query, bot) {
-  const telegramId = query.from.id;
-  const data = query.data;
+async function callbackHandler(ctx, bot) {
+  const tid = ctx.from.id;
+  const data = ctx.callbackQuery.data;
 
-  if (limitCallback(telegramId)) {
-    return bot.answerCallbackQuery(query.id, { text: 'Too fast! Slow down.', show_alert: true });
-  }
+  if (limitCallback(tid)) return ctx.answerCbQuery('Too fast!', { show_alert: true });
 
   try {
-    const user = await getUser(telegramId);
-    if (!user) {
-      return bot.answerCallbackQuery(query.id, { text: 'Please send /start first.', show_alert: true });
-    }
-    if (user.banned) {
-      return bot.answerCallbackQuery(query.id, { text: 'Account banned.', show_alert: true });
-    }
+    const user = await getUser(tid);
+    if (!user) return ctx.answerCbQuery('Send /start first.', { show_alert: true });
+    if (user.banned) return ctx.answerCbQuery('Account banned.', { show_alert: true });
+
+    const edit = (text, extra) => ctx.editMessageText(text, { parse_mode: 'Markdown', chat_id: ctx.callbackQuery.message.chat.id, message_id: ctx.callbackQuery.message.message_id, ...extra });
+    const backBtn = { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] };
 
     switch (data) {
-      case 'home': {
-        await bot.editMessageText(getMsg('homeMenu', user.language), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: homeKeyboard(),
-        });
-        break;
-      }
+      case 'home':
+        return edit(getMsg('homeMenu', user.language), { reply_markup: homeKeyboard() });
 
       case 'balance': {
-        const todayEarnings = user.todayEarnings || 0;
-        const pendingWithdraws = (await getUserWithdrawals(telegramId)).filter(w => w.status === 'Pending');
-        const pendingAmount = pendingWithdraws.reduce((s, w) => s + w.amount, 0);
-        const bal = {
-          balance: user.balance || 0,
-          todayEarnings,
-          totalEarnings: user.totalEarnings || 0,
-          pendingWithdraw: pendingAmount,
-          totalWithdraw: user.totalWithdraw || 0,
-        };
-        await bot.editMessageText(getMsg('balance', user.language, bal), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-        });
-        break;
+        const p = (await getUserWithdrawals(tid)).filter(w => w.status === 'Pending');
+        const bal = { balance: user.balance, todayEarnings: user.todayEarnings, totalEarnings: user.totalEarnings, pendingWithdraw: p.reduce((s, w) => s + w.amount, 0), totalWithdraw: user.totalWithdraw };
+        return edit(getMsg('balance', user.language, bal), { reply_markup: backBtn });
       }
 
-      case 'earn': {
-        await bot.editMessageText(getMsg('earnMenu', user.language), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: earnKeyboard(),
-        });
-        break;
-      }
+      case 'earn':
+        return edit(getMsg('earnMenu', user.language), { reply_markup: earnKeyboard() });
 
-      case 'earn_watch_ad': {
-        const result = await watchAd(telegramId);
-        if (result.error) {
-          await bot.answerCallbackQuery(query.id, { text: result.error, show_alert: true });
-        } else {
-          await bot.answerCallbackQuery(query.id, { text: `Earned ${result.reward} EIKA!`, show_alert: true });
-          await bot.editMessageText(getMsg('taskEarn', user.language, 'Watch Ad', result.reward), {
-            chat_id: query.message.chat.id,
-            message_id: query.message.message_id,
-            parse_mode: 'Markdown',
-            reply_markup: earnKeyboard(),
-          });
-        }
-        break;
-      }
-
-      case 'earn_visit_site': {
-        const result = await visitWebsite(telegramId);
-        if (result.error) {
-          await bot.answerCallbackQuery(query.id, { text: result.error, show_alert: true });
-        } else {
-          await bot.answerCallbackQuery(query.id, { text: `Earned ${result.reward} EIKA!`, show_alert: true });
-          await bot.editMessageText(getMsg('taskEarn', user.language, 'Visit Website', result.reward), {
-            chat_id: query.message.chat.id,
-            message_id: query.message.message_id,
-            parse_mode: 'Markdown',
-            reply_markup: earnKeyboard(),
-          });
-        }
-        break;
-      }
-
-      case 'earn_join_channel': {
-        const result = await joinChannel(telegramId);
-        if (result.error) {
-          await bot.answerCallbackQuery(query.id, { text: result.error, show_alert: true });
-        } else {
-          await bot.answerCallbackQuery(query.id, { text: `Earned ${result.reward} EIKA!`, show_alert: true });
-          await bot.editMessageText(getMsg('taskEarn', user.language, 'Join Channel', result.reward), {
-            chat_id: query.message.chat.id,
-            message_id: query.message.message_id,
-            parse_mode: 'Markdown',
-            reply_markup: earnKeyboard(),
-          });
-        }
-        break;
+      case 'earn_watch_ad': case 'earn_visit_site': case 'earn_join_channel': {
+        const tasks = { earn_watch_ad: ['Watch Ad', watchAd], earn_visit_site: ['Visit Website', visitWebsite], earn_join_channel: ['Join Channel', joinChannel] };
+        const [name, fn] = tasks[data];
+        const r = await fn(tid);
+        if (r.error) return ctx.answerCbQuery(r.error, { show_alert: true });
+        await ctx.answerCbQuery(`Earned ${r.reward} EIKA!`, { show_alert: true });
+        return edit(getMsg('taskEarn', user.language, name, r.reward), { reply_markup: earnKeyboard() });
       }
 
       case 'daily_bonus': {
-        const result = await claimDailyBonus(telegramId);
-        if (result.error) {
-          await bot.answerCallbackQuery(query.id, { text: result.error, show_alert: true });
-        } else {
-          await bot.answerCallbackQuery(query.id, { text: `Daily bonus: ${result.reward} EIKA!`, show_alert: true });
-          await bot.editMessageText(getMsg('dailyBonus', user.language, result.reward), {
-            chat_id: query.message.chat.id,
-            message_id: query.message.message_id,
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-          });
-        }
-        break;
+        const r = await claimDailyBonus(tid);
+        if (r.error) return ctx.answerCbQuery(r.error, { show_alert: true });
+        await ctx.answerCbQuery(`Daily bonus: ${r.reward} EIKA!`, { show_alert: true });
+        return edit(getMsg('dailyBonus', user.language, r.reward), { reply_markup: backBtn });
       }
 
       case 'referral': {
-        const link = await getReferralLink(telegramId);
-        const history = await getReferralHistory(telegramId);
-        const refData = {
-          link: link || 'Error generating link',
-          count: history.length,
-          earnings: user.referralEarnings || 0,
-        };
-        await bot.editMessageText(getMsg('referral', user.language, refData), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-        });
-        break;
+        const link = await getReferralLink(tid);
+        const hist = await getReferralHistory(tid);
+        return edit(getMsg('referral', user.language, { link: link || 'Error', count: hist.length, earnings: user.referralEarnings || 0 }), { reply_markup: backBtn });
       }
 
-      case 'withdraw': {
-        await bot.editMessageText(getMsg('withdrawMenu', user.language, config.withdraw.minAmount), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-        });
-        break;
-      }
+      case 'withdraw':
+        return edit(getMsg('withdrawMenu', user.language, config.withdraw.minAmount), { reply_markup: backBtn });
 
-      case 'history': {
-        await bot.editMessageText(getMsg('historyMenu', user.language), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: historyKeyboard(),
-        });
-        break;
-      }
+      case 'history':
+        return edit(getMsg('historyMenu', user.language), { reply_markup: historyKeyboard() });
 
-      case 'history_earnings': {
-        const earnings = await getEarningHistory(telegramId);
-        const text = getMsg('earningHistory', user.language, earnings);
-        await bot.editMessageText(text, {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'history' }]] },
-        });
-        break;
-      }
+      case 'history_earnings':
+        return edit(getMsg('earningHistory', user.language, await getEarningHistory(tid)), { reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'history' }]] } });
 
-      case 'history_withdrawals': {
-        const withdraws = await getUserWithdrawals(telegramId);
-        const text = getMsg('withdrawHistory', user.language, withdraws);
-        await bot.editMessageText(text, {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'history' }]] },
-        });
-        break;
-      }
+      case 'history_withdrawals':
+        return edit(getMsg('withdrawHistory', user.language, await getUserWithdrawals(tid)), { reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'history' }]] } });
 
       case 'history_referrals': {
-        const refs = await getReferralHistory(telegramId);
-        const text = refs.length
-          ? refs.map((r, i) => `${i + 1}. User \`${r.invitedId}\` - Earned ${r.reward} EIKA`).join('\n')
-          : 'No referrals yet. Share your referral link to earn!';
-        await bot.editMessageText(text, {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'history' }]] },
-        });
-        break;
+        const refs = await getReferralHistory(tid);
+        return edit(refs.length ? refs.map((r, i) => `${i + 1}. User \`${r.invitedId}\` - ${r.reward} EIKA`).join('\n') : 'No referrals yet.', { reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'history' }]] } });
       }
 
-      case 'profile': {
-        await bot.editMessageText(getMsg('profile', user.language, user), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-        });
-        break;
-      }
+      case 'profile':
+        return edit(getMsg('profile', user.language, user), { reply_markup: backBtn });
 
-      case 'channels': {
-        let msg = getMsg('channels', user.language);
-        if (config.channels.required.length) {
-          msg += '\n\n' + config.channels.required.map((c, i) => `${i + 1}. ${c}`).join('\n');
-        } else {
-          msg += '\n\nNo channels required yet.';
-        }
-        await bot.editMessageText(msg, {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-        });
-        break;
-      }
+      case 'channels':
+        return edit(getMsg('channels', user.language) + (config.channels.required.length ? '\n\n' + config.channels.required.join('\n') : ''), { reply_markup: backBtn });
 
-      case 'support': {
-        await bot.editMessageText(getMsg('support', user.language, config.support.username), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '📞 Contact Support', url: `https://t.me/${config.support.username}` }],
-              [{ text: '🔙 Back', callback_data: 'home' }],
-            ],
-          },
-        });
-        break;
-      }
+      case 'support':
+        return edit(getMsg('support', user.language, config.support.username), { reply_markup: { inline_keyboard: [[{ text: '📞 Contact', url: `https://t.me/${config.support.username}` }], [{ text: '🔙 Back', callback_data: 'home' }]] } });
 
-      case 'about': {
-        await bot.editMessageText(getMsg('about', user.language), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'home' }]] },
-        });
-        break;
-      }
+      case 'about':
+        return edit(getMsg('about'), { reply_markup: backBtn });
 
-      case 'admin_stats': await adminStats(query, bot); break;
-      case 'admin_users': await adminUsers(query, bot); break;
-      case 'admin_broadcast': await adminBroadcast(query, bot); break;
-      case 'admin_withdraws': await adminWithdraws(query, bot); break;
-      case 'admin_export': await adminExport(query, bot); break;
+      case 'admin_stats': return adminStats(ctx, bot);
+      case 'admin_users': return adminUsers(ctx, bot);
+      case 'admin_broadcast': return adminBroadcast(ctx, bot);
+      case 'admin_withdraws': return adminWithdraws(ctx, bot);
+      case 'admin_export': return adminExport(ctx, bot);
 
-      default: {
-        if (data.startsWith('withdraw_approve_')) {
-          await approveWithdrawAction(query, bot);
-        } else if (data.startsWith('withdraw_reject_')) {
-          await rejectWithdrawAction(query, bot);
-        } else {
-          await bot.answerCallbackQuery(query.id, { text: 'Unknown action' });
-        }
-      }
+      default:
+        if (data.startsWith('withdraw_approve_')) return approveWithdrawAction(ctx, bot);
+        if (data.startsWith('withdraw_reject_')) return rejectWithdrawAction(ctx, bot);
+        return ctx.answerCbQuery('Unknown action');
     }
   } catch (err) {
-    logger.error(`Callback handler error: ${err.message}`);
-    try {
-      await bot.answerCallbackQuery(query.id, { text: 'Error occurred', show_alert: true });
-    } catch { }
+    logger.error(`Callback error: ${err.message}`);
+    try { await ctx.answerCbQuery('Error', { show_alert: true }); } catch { }
   }
 }
 
